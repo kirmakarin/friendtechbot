@@ -9,26 +9,29 @@ const wallet = new ethers.Wallet(process.env.PRIVATE_KEY);
 const account = wallet.connect(provider);
 
 const friends = new ethers.Contract(
-  friendsAddress,
-  [
-    'function buyShares(address arg0, uint256 arg1)',
-    'function getBuyPriceAfterFee(address sharesSubject, uint256 amount) public view returns (uint256)',
-    'event Trade(address trader, address subject, bool isBuy, uint256 shareAmount, uint256 ethAmount, uint256 protocolEthAmount, uint256 subjectEthAmount, uint256 supply)',
-  ],
-  account
+    friendsAddress,
+    [
+      'function buyShares(address arg0, uint256 arg1)',
+      'function getBuyPriceAfterFee(address sharesSubject, uint256 amount) public view returns (uint256)',
+      'event Trade(address trader, address subject, bool isBuy, uint256 shareAmount, uint256 ethAmount, uint256 protocolEthAmount, uint256 subjectEthAmount, uint256 supply)',
+    ],
+    account
 );
 
-const gasPrice = ethers.parseUnits('0.000000000000049431', 'ether');
-const FOLLOW_NUM = 50000;  // Adjust this number as per your requirement.
+
+const FOLLOW_NUM = 1000;  // Adjust this number as per your requirement.
+const TWITTER_SCOUT_SCORE = 250;  // Adjust this number as per your requirement.
+const TWITTER_SCOUT_PERFECT_SCORE = 500;  // Adjust this number as per your requirement.
+const MAX_BUY_PRICE = 25000000;
 const balanceArray = [];
+const amigosArray = [];
 
 const isNewAccount = ({ traderAddress, subjectAddress, isBuy, ethAmount, shareAmount, supply }) => {
   return (
     traderAddress === subjectAddress &&
     isBuy &&
-    ethAmount === '0.0' &&
-    shareAmount.eq(ethers.BigNumber.from(1)) &&
-    supply.eq(ethers.BigNumber.from(1))
+    ethAmount === '0' &&
+    supply <= 5
   );
 };
 
@@ -44,13 +47,19 @@ const run = async () => {
       shareAmount: event.args[3],
       supply: event.args[7]
     };
-    if (details.isBuy && isNewAccount(details)) {
+    if(amigosArray.indexOf(event.args[1]) !== -1) {
+      return;
+    }
+    amigosArray.push(event.args[1]);
+
+    // if (details.isBuy && isNewAccount(details)) {
+    if (details.isBuy && details.supply < 10 ){
       const amigo = event.args[1];
+      const feeData = await provider.getFeeData();
       const weiBalance = await provider.getBalance(amigo);
 
       for (const botBalance in balanceArray) {
         if (weiBalance > botBalance - 300000000000000 && weiBalance < botBalance + 300000000000000) {
-          // console.log('Bot detected: ', amigo);
           return;
         }
       }
@@ -61,18 +70,22 @@ const run = async () => {
 
       const userData = await getUserData(amigo);
       const twitterUsername = userData.twitterUsername;
+      let buyPrice = await friends.getBuyPriceAfterFee(amigo, 1);
+      const myBalance =  await provider.getBalance('0xDC94d0C56285E70274f7C5e14670CcAb28A9D677');
 
-      if (await hasFollowers(twitterUsername, FOLLOW_NUM)) {
-        let qty = 1;
-        if (weiBalance >= 90000000000000000) qty = 2;
-        if (weiBalance >= 900000000000000000) qty = 3;
+      if(buyPrice >= myBalance)
+        return;
+       let qty = await twitterCheck(twitterUsername, FOLLOW_NUM);
+      console.log(`${twitterUsername} qty = ${qty}`);
 
-        const buyPrice = await friends.getBuyPriceAfterFee(amigo, qty);
+      if (qty > 0) {
 
+        buyPrice = await friends.getBuyPriceAfterFee(amigo, qty);
+        console.log(`${twitterUsername} price = ${buyPrice}`);
         if ((qty < 2 && buyPrice > 2000000000000000) || buyPrice > 10000000000000000) return;
 
         console.log('### BUY ###', amigo, buyPrice);
-        const tx = await friends.buyShares(amigo, qty, { value: buyPrice, gasPrice });
+        const tx = await friends.buyShares(amigo, qty, { value: buyPrice, gasPrice: feeData.gasPrice });
         fs.appendFileSync('./buys.txt', amigo + "\n");
 
         try {
@@ -85,26 +98,36 @@ const run = async () => {
         console.log(`User ${amigo} (${twitterUsername}) does not meet the follower count requirement.`);
       }
     }
-    else {
-      console.log('Not a new user.')
-    }
   });
 }
 
-async function hasFollowers({ subject }, followerNumber) {
-  if (!subject || typeof subject !== "string") {
-    // console.error("Invalid subject:", subject);
-    return false;
+async function twitterCheck(twitterUsername , followerNumber) {
+  if (!twitterUsername || typeof twitterUsername !== "string") {
+    return 0;
   }
 
-  if (!subject.startsWith('0x')) {
-    const followers = await getTwitterFollowersCount(subject);
-    if (followers > followerNumber) {
-      console.log(`${subject} has ${followers} followers`);
-      return true;
+  if (!twitterUsername.startsWith('0x')) {
+    const twitterUserData = await getTwitterUserData(twitterUsername);
+    const followers_count = twitterUserData[0].followers_count
+    const statuses_count = twitterUserData[0].statuses_count
+    const created_at = twitterUserData[0].created_at
+    const accountCreationYear = new Date(created_at).getFullYear();
+    if (followers_count > followerNumber
+        && statuses_count > 50
+        && accountCreationYear <= 2022
+    ) {
+      console.log(`${twitterUsername} has ${followers_count} followers,
+          ${statuses_count} tweets and was created at ${accountCreationYear} `);
+      const twitterScore = await getTweetScoutData(twitterUsername);
+      if (twitterScore >= TWITTER_SCOUT_PERFECT_SCORE) {
+        return 2;
+      }
+      if (twitterScore >= TWITTER_SCOUT_SCORE) {
+        return 1;
+      }
     }
   }
-  return false;
+  return 0;
 }
 
 async function getUserData(address) {
@@ -120,7 +143,7 @@ async function getUserData(address) {
   return { twitterUsername: address };
 }
 
-async function getTwitterFollowersCount(profileName) {
+async function getTwitterUserData(profileName) {
   const myHeaders = new Headers({
     "Authorization": `Bearer ${process.env.TWITTER_TOKEN}`
   });
@@ -134,11 +157,35 @@ async function getTwitterFollowersCount(profileName) {
   try {
     const response = await fetch(`https://api.twitter.com/1.1/users/lookup.json?screen_name=${profileName}`, requestOptions);
     if (response.ok) {
-      const data = await response.json();
-      return data[0].followers_count;
+      return await response.json();
     }
   } catch (err) {
-    console.error(`Failed to fetch follow count for ${profileName}: ${err.message}`);
+    console.error(`Failed to fetch twitter user data for ${profileName}: ${err.message}`);
+  }
+  return 0;
+}
+
+async function getTweetScoutData(profileName) {
+  const myHeaders = new Headers({
+    "ApiKey": `${process.env.TWEET_SCOUT_TOKEN}`
+  });
+
+  const requestOptions = {
+    method: 'GET',
+    headers: myHeaders,
+    redirect: 'follow'
+  };
+
+  try {
+    const response = await fetch(`http://77.232.42.221:52354/api/score/${profileName}`, requestOptions);
+    if (response.ok) {
+      const data = await response.json();
+      const score = data.score;
+      console.log(`Twitter score for ${profileName} = ${score}`);
+      return score;
+    }
+  } catch (err) {
+    console.error(`Failed to fetch tweet scout user data for ${profileName}: ${err.message}`);
   }
   return 0;
 }
