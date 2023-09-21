@@ -51,7 +51,7 @@ const isNewAccount = ({
     traderAddress === subjectAddress &&
     isBuy &&
     ethAmount === "0" &&
-    supply <= 5
+    supply <= 3
   );
 };
 
@@ -82,7 +82,7 @@ const run = async () => {
     amigosArray.push(event.args[1]);
 
     // if (details.isBuy && isNewAccount(details)) {
-    if (details.isBuy && details.supply < 6) {
+    if (details.isBuy && isNewAccount(details)) {
       const amigo = event.args[1];
       const feeData = await provider.getFeeData();
       const weiBalance = await provider.getBalance(amigo);
