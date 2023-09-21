@@ -4,5 +4,9 @@
     "ethers": "^6.7.1",
     "node-fetch": "^3.3.2",
     "twit": "^2.2.11"
+  },
+  "devDependencies": {
+    "eslint": "^8.49.0",
+    "prettier": "3.0.3"
   }
 }
